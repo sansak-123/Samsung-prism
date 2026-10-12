@@ -3,8 +3,7 @@
 .kaggle-venv/
 __pycache__/
 *.pyc
-# generated data and outputs (regenerate with scripts/01_generate_dataset.py)
-data/
+# generated outputs
 pilot/images/
 predictions/
 outputs/
