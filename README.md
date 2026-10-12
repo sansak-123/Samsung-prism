@@ -60,6 +60,11 @@ restaurant menu, event flyer, mobile settings screen - all randomised (names, it
 fonts from 11 bundled open-licence families, paper texture, logos, stamps, QR codes, signatures, photos).
 Drop your own photos into `assets/photos/` and the flyer/menu/form photo areas will use them.
 
+### Included dataset
+The generated dataset is committed in `data/`: 700 samples (`data/images/sample_XXXX/{original,R1,R2,R3}.png`,
+2,800 images), full metadata and the train/val/test pairs, so stages 1-2 can be skipped. Regenerating with
+`scripts/01_generate_dataset.py` reproduces it (seeded).
+
 ### Metadata
 - `data/metadata/samples.jsonl` - one record per sample: template, seed, original path, `ocr_data`
   (line text + bounding boxes), and per release: image path, `target_scores`, ground-truth `scores`,
