@@ -1,0 +1,12 @@
+# environments
+.venv/
+.kaggle-venv/
+__pycache__/
+*.pyc
+# generated data and outputs (regenerate with scripts/01_generate_dataset.py)
+data/
+pilot/images/
+predictions/
+outputs/
+reports/
+*.log

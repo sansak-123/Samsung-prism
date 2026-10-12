@@ -1,0 +1,82 @@
+# Samsung PRISM 26VI05 - VLM image evaluation pipeline (English only)
+project_seed: 2026
+
+paths:
+  data_dir: data
+  images_dir: data/images
+  metadata_dir: data/metadata
+  pairs_dir: data/pairs
+  pilot_dir: pilot
+  outputs_dir: outputs          # checkpoints / adapters
+  predictions_dir: predictions
+  reports_dir: reports
+
+dataset:
+  n_samples: 700                # core samples (each = Original + R1 + R2 + R3) -> 2,100 pairs
+  language: en
+  templates: [invoice, receipt, certificate, application_form, business_letter, restaurant_menu, event_flyer, mobile_settings]
+  release_profiles:             # which metric category each release degrades most
+    R1: technical
+    R2: visual
+    R3: human_perception
+  workers: 0                    # 0 = all CPU cores
+
+sampling:                       # how pre-defined target scores are drawn (severity = 1 - score)
+  p_clean_release: 0.08         # release with only minute changes everywhere
+  focus_beta_a: 2.0             # focus-category severity ~ Beta(2.0, 2.6)  (mean ~0.43)
+  focus_beta_b: 2.6
+  minute_beta_a: 1.1            # off-focus "minute" severity ~ Beta(1.1, 14) (mean ~0.07)
+  minute_beta_b: 14.0
+  p_untouched_metric: 0.30      # chance an off-focus metric is exactly unchanged
+  p_extra_defect: 0.20          # chance of one extra moderate off-focus defect
+
+pilot:
+  levels: [0.05, 0.15, 0.30, 0.50, 0.75]   # 5 images per artifact type (12 metrics -> 60 pairs)
+
+splits:
+  train: 0.70
+  val: 0.15
+  test: 0.15                    # grouped by sample_id, stratified by template -> no leakage
+
+model:
+  base: Qwen/Qwen2.5-VL-3B-Instruct
+  min_pixels: 200704            # 256 * 28 * 28
+  max_pixels: 802816            # 1024 * 28 * 28 -> ~1000 visual tokens per 768x1024 image
+  max_seq_len: 4096             # sequences are NEVER truncated; longer ones abort with an error
+
+qlora:
+  load_in_4bit: true
+  quant_type: nf4
+  double_quant: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: all-linear
+
+train:
+  epochs: 3
+  per_device_batch_size: 1
+  grad_accum: 16
+  learning_rate: 1.0e-4         # deck listed 1-2e-5; for LoRA adapters 1e-4 is the usual working range
+  lr_scheduler: cosine
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  logging_steps: 5
+  evals_per_epoch: 2
+  val_loss_subset: 120          # pairs used for eval_loss
+  val_generation_subset: 32     # pairs generated + scored at each eval -> checkpoint selection by val MAE
+  gradient_checkpointing: true
+  save_total_limit: 3
+
+inference:
+  batch_size: 4
+  max_new_tokens: 768
+  retry_max_new_tokens: 256
+  prompt_study_n: 60            # val pairs used to compare P1-P4 zero-shot
+  test_limit: 0                 # 0 = full test split
+
+scoring:
+  category_weights: {technical: 1.0, visual: 1.0, human_perception: 1.0}
+
+evaluation:
+  top_error_threshold: 0.30
