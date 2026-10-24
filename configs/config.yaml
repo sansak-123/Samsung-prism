@@ -11,19 +11,14 @@ paths:
   predictions_dir: predictions
   reports_dir: reports
 
-dataset:
-  n_samples: 700                # core samples (each = Original + R1 + R2 + R3) -> 2,100 pairs
+dataset:                        # the dataset is the "24 generation" ladder below (scripts/01_generate_dataset.py)
   language: en
   templates: [invoice, receipt, certificate, application_form, business_letter, restaurant_menu, event_flyer, mobile_settings,
               bank_statement, payslip, boarding_pass, medical_prescription, resume, newsletter, nutrition_label, id_card,
               shipping_label, report_card, utility_bill, email_message, web_landing_page, chat_screenshot, presentation_slide]
-  release_profiles:             # which metric category each release degrades most
-    R1: technical
-    R2: visual
-    R3: human_perception
   workers: 0                    # 0 = all CPU cores
 
-sampling:                       # how pre-defined target scores are drawn (severity = 1 - score)
+sampling:                       # whole-document target scores (severity = 1 - score); only the renderer self-test uses these
   p_clean_release: 0.08         # release with only minute changes everywhere
   focus_beta_a: 2.0             # focus-category severity ~ Beta(2.0, 2.6)  (mean ~0.43)
   focus_beta_b: 2.6
@@ -32,18 +27,18 @@ sampling:                       # how pre-defined target scores are drawn (sever
   p_untouched_metric: 0.30      # chance an off-focus metric is exactly unchanged
   p_extra_defect: 0.20          # chance of one extra moderate off-focus defect
 
-ladder:                         # minute-change ladder (prism/ladder.py): per Original 1 control + edit families x 4 levels
-  n_originals: 63               # 3 per template; scores are MEASURED by the renderer during generation (no manual labels)
-  # first 6 = the prism_iqa "24 generation" (6 x 4); the other 7 give 11 of the 12 metrics their own ladder.
-  # all 13 -> 1 + 52 releases per Original (63 x 53 = 3,339 pairs). Keep only the first 6 for exactly 24.
-  knobs: [font_family, font_size, font_color, inpaint_color_mismatch, justification, line_spacing,
-          char_substitution, ghost_residue, texture_smoothing, lighting_drop, local_compression, object_shift, heading_shift]
+ladder:                         # THE dataset (prism/ladder.py): per Original 1 control + edit families x 4 levels
+  n_originals: 147              # 7 per template = smallest count that keeps the 70/15/15 split
+                                # scores are MEASURED by the renderer during generation (no manual labels)
+  # the prism_iqa "24 generation": 6 families x 4 levels -> 1 + 24 releases per Original (147 x 25 = 3,675 pairs).
+  # optional extra families (11 of the 12 metrics get their own ladder with all 13 -> 1 + 52 releases):
+  #   char_substitution, ghost_residue, texture_smoothing, lighting_drop, local_compression, object_shift, heading_shift
+  knobs: [font_family, font_size, font_color, inpaint_color_mismatch, justification, line_spacing]
   # restaurant_menu / mobile_settings are left out: they have no multi-line body block for the line-spacing edit
   templates: [invoice, receipt, certificate, application_form, business_letter, event_flyer,
               bank_statement, payslip, boarding_pass, medical_prescription, resume, newsletter, nutrition_label, id_card,
               shipping_label, report_card, utility_bill, email_message, web_landing_page, chat_screenshot, presentation_slide]
   max_conflicts: 0              # 0 = the edited block must never run into other text/objects/rules
-  include_in_train: false       # true = also append ladder train pairs to data/pairs/train.jsonl
 
 pilot:
   levels: [0.05, 0.15, 0.30, 0.50, 0.75]   # 5 images per artifact type (12 metrics -> 60 pairs)

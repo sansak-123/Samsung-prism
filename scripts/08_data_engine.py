@@ -1,7 +1,7 @@
 """Stage 8 - Self-improving data engine: generate more training data exactly where the model is still blind.
 
 Reads the ladder sensitivity analysis of a model (reports/evaluation_results.json from 06_evaluate.py on
---split ladder_test or ladder_val), finds the edit families whose just-noticeable level is not L1 (or that
+--split test or val), finds the edit families whose just-noticeable level is not L1 (or that
 are never detected), and generates new ladder Originals that contain ONLY those edit families. They are
 written to data/metadata/ladder_engine.jsonl and 02_build_splits.py adds them to the TRAINING split only
 (they are new documents, so val/test stay untouched). Retrain, re-evaluate, repeat - every round focuses
@@ -59,7 +59,7 @@ def main():
     path = a.results or os.path.join(P(cfg, "reports_dir"), "evaluation_results.json")
     res = json.load(open(path))
     if a.model not in res or "ladder" not in res[a.model]:
-        sys.exit(f"{path} has no ladder analysis for {a.model} - run 06_evaluate.py --split ladder_val first")
+        sys.exit(f"{path} has no ladder analysis for {a.model} - run 06_evaluate.py --split val first")
     weak = blind_spots(res[a.model]["ladder"])
     print(f"[engine] blind spots of {a.model}: {weak or 'none - every edit family detected at level 1'}")
     if not weak:

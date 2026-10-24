@@ -203,7 +203,7 @@ def write_report(results: dict, rows_by_model: dict, out_dir: str, title: str = 
         ("Overall-score MAE", lambda r: r["per_category"]["overall"]["MAE"]),
         ("Overall-score SROCC", lambda r: r["per_category"]["overall"]["SROCC"]),
         ("Best-release accuracy (RSA)", lambda r: r["ranking"]["best_release_accuracy_RSA"]),
-        ("Exact R1/R2/R3 ranking accuracy", lambda r: r["ranking"]["exact_ranking_accuracy"]),
+        ("Exact release-ranking accuracy (24 edits)", lambda r: r["ranking"]["exact_ranking_accuracy"]),
         ("Mean Kendall tau (ranking)", lambda r: r["ranking"]["mean_kendall_tau"]),
     ]
     for label, fn in rowsdef:
@@ -281,7 +281,7 @@ def write_report(results: dict, rows_by_model: dict, out_dir: str, title: str = 
     for label, fn in gate_rows:
         L.append(f"| {label} | " + " | ".join(_fmt(fn(results[n])) for n in names) + " |")
     L += ["", "## Files", "", "- `evaluation_metrics.xlsx` - every table above plus top errors and per-sample rankings",
-          "- `release_rankings_<model>.csv` - per sample: ground-truth vs predicted R1/R2/R3 ranking and best release",
+          "- `release_rankings_<model>.csv` - per sample: ground-truth vs predicted ranking of the 24 edited releases and best release",
           "- `figures/` - MAE per metric, GT-vs-prediction scatter per metric, quality-band confusion"]
     with open(os.path.join(out_dir, "evaluation_report.md"), "w") as f:
         f.write("\n".join(L) + "\n")

@@ -1,4 +1,0 @@
-{"id": "sanvisaket/prism-vlm-pipeline-resume", "title": "prism-vlm-pipeline-resume", "code_file": "run_pipeline.py",
- "language": "python", "kernel_type": "script", "is_private": true, "enable_gpu": true, "enable_internet": true,
- "dataset_sources": ["sanvisaket/prism-vlm-code"], "competition_sources": [],
- "kernel_sources": ["sanvisaket/prism-vlm-datagen", "sanvisaket/prism-vlm-pipeline"]}

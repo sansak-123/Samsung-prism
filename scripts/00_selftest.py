@@ -109,12 +109,13 @@ def main():
                                 pred_dir=pdir, out_dir=os.path.join(P(cfg, "reports_dir"), "selftest"),
                                 extra={"NOTE": "SELF-TEST with mock predictors - not model results"})
         o, c, m = res["mock_oracle_noise05"], res["mock_constant"], res["mock_noise10_malformed"]
-        check(abs(o["all_metrics_pooled"]["MAE"] - 0.04) < 0.015, f"oracle+N(0,.05) MAE ~0.04 (got {o['all_metrics_pooled']['MAE']:.4f})")
+        # most ladder scores are exactly 1.0, where clipping at 1 halves the noise: expect 0.02-0.04
+        check(0.015 < o["all_metrics_pooled"]["MAE"] < 0.045, f"oracle+N(0,.05) MAE 0.02-0.04 (got {o['all_metrics_pooled']['MAE']:.4f})")
         check(o["all_metrics_pooled"]["MAE"] < c["all_metrics_pooled"]["MAE"], "oracle beats constant predictor")
         check(0.8 < m["coverage"]["valid_rate"] < 0.97, f"malformed outputs caught by gate (valid rate {m['coverage']['valid_rate']:.2f})")
         check(os.path.exists(os.path.join(P(cfg, "reports_dir"), "selftest", "evaluation_metrics.xlsx")), "xlsx report written")
 
-    print("[6] minute-change ladder (3 Originals, all edit families)")
+    print("[6] minute-change ladder (3 Originals, configured edit families)")
     import tempfile
     from prism.common import abspath
     from prism.evaluation import ladder_sensitivity
@@ -152,7 +153,7 @@ def main():
     from prism.evaluation import explanation_check, quality_gate
     from prism.judge import verdict
     ex = explanation_check(lrows)
-    check(ex["location_accuracy"] == 1.0 and ex["quantity_accuracy"] == 1.0 and ex["n_quantity"] > 50,
+    check(ex["location_accuracy"] == 1.0 and ex["quantity_accuracy"] == 1.0 and ex["n_quantity"] > 30,
           f"explanation check: a truthful explanation scores 1.0 ({ex['n_quantity']} quantities)")
     g = quality_gate(lrows, 0.95)
     check(g["decision_accuracy"] == 1.0 and g["diagnosis_accuracy"] == 1.0, "quality gate: oracle decides and diagnoses perfectly")

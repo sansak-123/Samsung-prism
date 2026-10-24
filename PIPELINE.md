@@ -19,58 +19,19 @@ All settings: `configs/config.yaml`. Every stage is resumable (re-running skips 
 - Paths are resolved relative to the project root; `abspath()` normalises Windows `\` so metadata
   generated on Windows works on Linux (Kaggle/Colab).
 
-## [1] Score-first dataset synthesis - `scripts/01_generate_dataset.py`
-Per sample `i` (700 samples, multiprocessing pool):
+## [1] Dataset: the "24 generation" ladder - `scripts/01_generate_dataset.py`, `prism/ladder.py`
+Per Original `i` (147 Originals = 7 per template, multiprocessing pool): `control_0` + **6 edit families x
+4 levels = 24 releases**, each changing ONE thing (one multi-line text block) - the prism_iqa "24 generation"
+(github.com/Sanjana432/prism_iqa `LADDERS`). `ladder.knobs` selects the families; 7 more exist (11 of the
+12 metrics then get their own ladder, 52 releases per Original).
 
-1. **Document** - `prism/templates.py`, `document.py`, `objects.py`
-   - template = `templates[i % 23]`: invoice, receipt, certificate, application_form, business_letter,
-     restaurant_menu, event_flyer, mobile_settings, bank_statement, payslip, boarding_pass, medical_prescription,
-     resume, newsletter, nutrition_label, id_card, shipping_label, report_card, utility_bill, email_message,
-     web_landing_page, chat_screenshot, presentation_slide.
-   - `doc_seed = 2026 * 100003 + i` randomises text, prices, names, colours, 11 bundled font families,
-     paper texture, logos, stamps, QR codes, signatures, photos.
-   - Rendered Original -> `data/images/sample_XXXX/original.png`; OCR boxes recorded.
-2. **Target severities** (score = 1 - severity) - `prism/perturb.py::sample_release_severities`
-   - R1 focus = technical, R2 = visual, R3 = human_perception.
-   - focus-category metrics: `Beta(2.0, 2.6)` (mean 0.43).
-   - off-focus metrics: exactly 0 with p = 0.30, else `Beta(1.1, 14)` (mean 0.07, "minute" changes).
-   - p = 0.20: one extra off-focus defect `U(0.25, 0.70)`; p = 0.08: whole release near-clean.
-   - rounded to a 0.01 grid.
-3. **Controlled rendering** - `prism/render.py::plan_release`, `render`. Severity 1.0 maps to (`prism/metrics.py::PHYS`):
-
-   | Metric | Physical change at severity 1.0 |
-   |---|---|
-   | ocr_accuracy | 25% characters substituted with visual confusables (O/0, l/1, …) |
-   | alignment_preservation | text blocks moved 40 px x / 12 px y |
-   | font_similarity | 0.6 × size change (±35%) + 0.4 × typeface change (similar 0.5, other class 1.0) |
-   | object_preservation | objects shrink 40%, shift 30 px, fade 70% |
-   | background_fidelity | inpainted text regions shifted to CIEDE2000 ΔE 25 |
-   | texture_continuity | paper grain smoothed in edited regions (blur searched to hit target) |
-   | ghost_text_residue | offset copy of old glyphs at 45% opacity |
-   | lighting_consistency | illumination gradient, 45% darker at one end |
-   | reading_flow | line spacing +60% / −30%, baseline jitter 15% of line height |
-   | visual_anchor_integrity | headings shrink 35% / move 25 px, rules thinned and broken |
-   | semantic_emphasis | fraction of bold/coloured phrases lose styling |
-   | authenticity | JPEG quality 95 -> 20 + Gaussian noise (σ ≤ 6) in edited patches |
-
-4. **Measured ground truth** - after rendering, each realised change is measured (e.g. ΔE after gamut
-   clipping, texture loss after blur, actual character error rate) and stored as `scores`.
-   Target-vs-realised MAE ≤ 0.028 for every metric (`generation_summary.json`).
-5. **Reasoning target** - `prism/reasoning.py` writes one `observation -> score` line per metric from the
-   control parameters (e.g. `OCR: about 6.9% of characters differ ("Wireless"->"Wirebess") -> 0.72`).
-6. **Ground-truth ranking** - `prism/scoring.py` applied to the measured scores -> `gt_ranking`, `gt_best_release`.
-
-Outputs: `data/images/` (2,800 PNG), `data/metadata/samples.jsonl` (full record), `metadata.csv`,
-`generation_summary.json`.
-
-## [1b] Minute-change ladder - `prism/ladder.py` (run by `01_generate_dataset.py`, `--only ladder`)
-Per ladder Original: `control_0` + **13 edit families x 4 levels = 52 releases**, each changing ONE thing
-(one multi-line text block, one object or one heading). The first 6 families are the prism_iqa
-"24 generation" (github.com/Sanjana432/prism_iqa `LADDERS`: 6 x 4 = 24 releases); the other 7 give 11 of
-the 12 metrics their own single-factor ladder. `ladder.knobs` in the config selects the families.
-
+1. **Document** - `prism/templates.py`, `document.py`, `objects.py`: one of 21 templates (`ladder.templates`),
+   seeded text, prices, names, colours, 11 bundled font families, paper texture, logos, stamps, QR codes,
+   signatures, photos. A multi-line body block is chosen that no edit can push into other content.
+2. **Edits** - each release re-renders the Original with one local change; pixels outside the edited block
+   are audited to be unchanged.
 Every score is computed automatically while the image is generated (no manual annotation), from what was
-actually drawn, on the same scales (`metrics.PHYS`) as the R1/R2/R3 releases.
+actually drawn, on the physical scales in `metrics.PHYS`.
 `score = round(1 - min(1, severity), 2)`.
 
 | Edit family | Levels | Metric | Severity (written out in each release's `score_calculation`) |
@@ -105,19 +66,19 @@ actually drawn, on the same scales (`metrics.PHYS`) as the R1/R2/R3 releases.
   stored measurements with its own copy of the formulas, checks locality, and cross-checks the images
   (controls pixel-identical, a 4 px shift shows up as a 4 px left-edge move, ...) ->
   `reports/ladder_score_check.csv` (one row per release x metric: formula, recomputed, stored).
-- Reasoning lines name the region (e.g. `in the top-right block "Bill To Karthik ..."`).
+- **Reasoning target** - `prism/reasoning.py` writes one `observation -> score` line per metric;
+  lines name the region (e.g. `in the top-right block "Bill To Karthik ..."`).
 - Outputs: `data/images/ladder_XXXX/`, `ladder.jsonl`, `ladder_metadata.csv`, `ladder_summary.json`,
   `metadata_ladder.json` (metadata_real.json schema with measured `metric_scores`, plus trailing
-  `score_calculation` and `pixel_measurements`). Pairs: `data/pairs/ladder_{train,val,test}.jsonl`.
-- Evaluation (`06_evaluate.py --split ladder_test`): detection rate per level (prediction below the model's
+  `score_calculation` and `pixel_measurements`). 147 x 26 = 3,822 PNG.
+- Ladder evaluation (part of `06_evaluate.py`): detection rate per level (prediction below the model's
   own control prediction), just-noticeable level (>= 50 % detected), Spearman(level, prediction), false-alarm
   rate on the identical controls, **attribution precision** (share of the predicted drop that lands on the
   edited metric) and the full edit x metric leakage matrix, figure `ladder_sensitivity.png`.
-  `ladder.include_in_train: true` adds ladder train pairs to training.
 
 ## [2] Leakage-free splits + pairwise records - `scripts/02_build_splits.py`
 - Group by `sample_id`, stratify by template, shuffle with the seed: 70 / 15 / 15 ->
-  492 / 104 / 104 samples = **1,476 / 312 / 312 pairs**.
+  105 / 21 / 21 Originals = **2,625 / 525 / 525 pairs** (control + 24 releases each).
 - One record per (Original, Release): image paths, `prompt_id = P4`, `scores`, and
   `target = "<analysis>\n" + reasoning + "\n</analysis>\n" + JSON(12 scores)`.
 - Assertion: every `sample_id` appears in exactly one split -> `split_manifest.json`.
@@ -183,7 +144,8 @@ Selected prompt on the full **test** split -> `predictions/baseline_zero_shot_te
 - **Regression** (per metric / category / overall / template): MAE, RMSE, PLCC, SROCC, bias,
   accuracy within ±0.05 / ±0.10 / ±0.15.
 - **Bands**: excellent ≥ 0.90, good 0.75-0.90, fair 0.50-0.75, poor < 0.50 -> accuracy + macro-F1.
-- **Ranking**: best-release accuracy, exact R1/R2/R3 order, Kendall τ, pairwise preference accuracy.
+- **Ranking**: over the 24 edited releases of each Original (control excluded): best-release accuracy,
+  exact order, Kendall τ, pairwise preference accuracy.
 - **Coverage**: valid-output rate after the gate.
 - **Audit**: top errors (|error| > 0.30), failure patterns, error by severity.
 - **No manual annotation**: all ground truth comes from the renderer's measurements.

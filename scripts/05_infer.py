@@ -2,7 +2,7 @@
 
 CoT reasoning -> 12 raw scores -> validation gate (1 retry) -> predictions/<name>_<split>.jsonl.
 Then runs the Python score engine on the predictions and writes the product report
-(per sample: category scores, overall, R1/R2/R3 ranking, best release) to reports/release_report_<name>.xlsx.
+(per Original: category scores, overall, release ranking, best release) to reports/release_report_<name>.xlsx.
 
 Usage: python scripts/05_infer.py --adapter outputs/best_adapter --name finetuned_qlora --split test
 """
@@ -25,7 +25,7 @@ def release_report(cfg, rows, items, path):
     meta = {it["id"]: it for it in items}
     by_s = defaultdict(dict)
     for r in rows:
-        if r["pred"]:
+        if r["pred"] and meta[r["id"]]["release_id"] != "control_0":
             by_s[meta[r["id"]]["sample_id"]][meta[r["id"]]["release_id"]] = r["pred"]
     out = []
     for sid, rels in sorted(by_s.items()):

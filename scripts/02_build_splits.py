@@ -1,12 +1,10 @@
 """Stage 2 - Leakage-free split (grouped by sample_id, stratified by template) + pairwise JSONL.
 
 Every pairwise record = Original + ONE release, the P4 prompt id, and the CoT+JSON training target.
-R1/R2/R3 of the same Original always land in the same split (asserted).
-Minute-change ladder samples (data/metadata/ladder.jsonl, if present) are split the same way and written
-to data/pairs/ladder_{train,val,test}.jsonl; with ladder.include_in_train their train pairs are also
-appended to train.jsonl.
+The dataset is the "24 generation" ladder (data/metadata/ladder.jsonl): the control and all 24 releases of
+the same Original always land in the same split (asserted).
 
-Outputs: data/pairs/{train,val,test}.jsonl, data/pairs/ladder_{train,val,test}.jsonl, data/pairs/split_manifest.json
+Outputs: data/pairs/{train,val,test}.jsonl, data/pairs/split_manifest.json
 """
 
 import argparse
@@ -51,22 +49,22 @@ def to_pairs(samples, assign):
         for rel in s["releases"]:
             target = ("<analysis>\n" + rel["reasoning"] + "\n</analysis>\n"
                       + json.dumps({k: rel["scores"][k] for k in METRIC_KEYS}))
-            row = {
+            pairs[sp].append({
                 "id": f"{s['sample_id']}_{rel['release_id']}",
                 "sample_id": s["sample_id"],
                 "release_id": rel["release_id"],
-                "kind": s.get("kind", "triplet"),
+                "kind": s.get("kind", "ladder"),
                 "template": s["template"],
                 "original_image_path": s["original_image_path"],
                 "release_image_path": rel["release_image_path"],
                 "prompt_id": TRAIN_PROMPT,
                 "target": target,
                 "scores": rel["scores"],
-            }
-            if row["kind"] == "ladder":
-                row.update({"artifact_type": rel["artifact_type"], "level": rel["level"],
-                            "artifact_value": rel["artifact_value"], "primary_metric": rel["primary_metric"]})
-            pairs[sp].append(row)
+                "artifact_type": rel["artifact_type"],
+                "level": rel["level"],
+                "artifact_value": rel["artifact_value"],
+                "primary_metric": rel["primary_metric"],
+            })
     return pairs
 
 
@@ -83,22 +81,11 @@ def main():
     a = ap.parse_args()
     cfg = load_config(a.config)
     fr = cfg["splits"]
-    samples = read_jsonl(P(cfg, "metadata_dir", "samples.jsonl"))
+    samples = read_jsonl(P(cfg, "metadata_dir", "ladder.jsonl"))
     holdout = set(fr.get("holdout_templates") or [])
     assign = assign_splits(samples, fr, random.Random(cfg["project_seed"]), holdout)
     pairs = to_pairs(samples, assign)
-
-    ladder_path = P(cfg, "metadata_dir", "ladder.jsonl")
-    ladder_pairs = None
-    if os.path.exists(ladder_path):
-        ladder = read_jsonl(ladder_path)
-        lassign = assign_splits(ladder, fr, random.Random(cfg["project_seed"] + 1), holdout)
-        ladder_pairs = to_pairs(ladder, lassign)
-        for sp, rows in ladder_pairs.items():
-            write_jsonl(P(cfg, "pairs_dir", f"ladder_{sp}.jsonl"), rows)
-        if cfg.get("ladder", {}).get("include_in_train"):
-            pairs["train"] += ladder_pairs["train"]
-            random.Random(cfg["project_seed"] + 2).shuffle(pairs["train"])
+    random.Random(cfg["project_seed"] + 2).shuffle(pairs["train"])
 
     # data-engine rounds (08_data_engine.py): new documents aimed at the model's blind spots -> training only
     engine_path = P(cfg, "metadata_dir", "ladder_engine.jsonl")
@@ -113,16 +100,12 @@ def main():
     for sp, rows in pairs.items():
         write_jsonl(P(cfg, "pairs_dir", f"{sp}.jsonl"), rows)
 
-    # leakage assertion (core and ladder Originals are different documents; each must stay in one split)
+    # leakage assertion (every release of an Original must stay in one split)
     seen = {}
-    for group in (pairs, ladder_pairs or {}):
-        for sp, rows in group.items():
-            for r in rows:
-                assert seen.setdefault(r["sample_id"], sp) == sp, f"LEAKAGE: {r['sample_id']} in {seen[r['sample_id']]} and {sp}"
+    for sp, rows in pairs.items():
+        for r in rows:
+            assert seen.setdefault(r["sample_id"], sp) == sp, f"LEAKAGE: {r['sample_id']} in {seen[r['sample_id']]} and {sp}"
     manifest = _manifest(pairs)
-    if ladder_pairs:
-        manifest["ladder"] = _manifest(ladder_pairs)
-        manifest["ladder"]["included_in_train"] = bool(cfg["ladder"].get("include_in_train"))
     manifest["holdout_templates"] = sorted(holdout)
     manifest["data_engine_train_pairs"] = n_engine
     assert not any(r["template"] in holdout for r in pairs["train"] + pairs["val"]), "holdout template leaked into train/val"
@@ -130,8 +113,6 @@ def main():
     with open(P(cfg, "pairs_dir", "split_manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2)
     print({sp: (manifest[sp]["n_samples"], manifest[sp]["n_pairs"]) for sp in pairs}, manifest["leakage_check"])
-    if ladder_pairs:
-        print("ladder:", {sp: (manifest["ladder"][sp]["n_samples"], manifest["ladder"][sp]["n_pairs"]) for sp in ladder_pairs})
 
 
 if __name__ == "__main__":

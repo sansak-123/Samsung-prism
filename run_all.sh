@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 PY=${PY:-python}
 
 echo "=== [1/7] dataset generation (CPU) ==="
-if [ ! -f data/metadata/samples.jsonl ] || [ "$(wc -l < data/metadata/samples.jsonl)" -lt "$($PY -c 'import yaml;print(yaml.safe_load(open("configs/config.yaml"))["dataset"]["n_samples"])')" ]; then
+if [ ! -f data/metadata/ladder.jsonl ] || [ "$(wc -l < data/metadata/ladder.jsonl)" -lt "$($PY -c 'import yaml;print(yaml.safe_load(open("configs/config.yaml"))["ladder"]["n_originals"])')" ]; then
   $PY scripts/01_generate_dataset.py
 fi
 echo "=== [2/7] leakage-free splits + pairwise JSONL ==="

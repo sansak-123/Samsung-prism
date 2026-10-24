@@ -26,7 +26,7 @@ def load_rows(cfg, model, split, pred_dir=None):
         g = gt[pid]
         rows.append({"id": pid, "sample_id": g["sample_id"], "release_id": g["release_id"], "template": g["template"],
                      "gt": g["scores"], "pred": p.get("pred"), "retried": p.get("retried", False),
-                     "kind": g.get("kind", "triplet"), "target": g.get("target"), "raw": p.get("raw"),
+                     "kind": g.get("kind", "ladder"), "target": g.get("target"), "raw": p.get("raw"),
                      **{k: g[k] for k in ("artifact_type", "level", "artifact_value", "primary_metric") if k in g}})
     return rows
 

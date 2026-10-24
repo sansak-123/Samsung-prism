@@ -81,10 +81,11 @@ def evaluate(records: list, category_weights=None, top_error_threshold=0.30, gat
         by_t[r["template"]].append((g["overall"], p["overall"]))
     res["per_template_overall"] = {t: regression_metrics([a for a, _ in v], [b for _, b in v]) for t, v in sorted(by_t.items())}
 
-    # ---------------- ranking / best-release (core R1/R2/R3 samples only; ladder has its own analysis)
+    # ---------------- ranking / best-release over the 24 edited releases of each Original. The unchanged
+    # control is left out: it is always the ground-truth best, so a model scoring everything 1.0 would win.
     by_s = defaultdict(dict)
     for r in valid:
-        if r.get("kind", "triplet") != "ladder":
+        if r["release_id"] != "control_0":
             by_s[r["sample_id"]][r["release_id"]] = r
     best_hits, exact_hits, taus, rows = [], [], [], []
     pair_hits = {k: [] for k in METRIC_KEYS + ["overall"]}
