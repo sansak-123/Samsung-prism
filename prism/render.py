@@ -26,7 +26,21 @@ CONFUSABLE = {"O": "0", "0": "O", "o": "0", "l": "1", "1": "l", "I": "1", "i": "
 
 
 # ------------------------------------------------------------------ background
+_BG_CACHE = {}
+
+
 def render_background(doc) -> np.ndarray:
+    """Deterministic in the Background spec; memoised (one entry) because the ladder renders the same
+    document 26 times. Returns a fresh copy so callers may modify it."""
+    bgd = doc.background
+    key = repr((doc.width, doc.height, bgd))
+    if key not in _BG_CACHE:
+        _BG_CACHE.clear()
+        _BG_CACHE[key] = _render_background(doc)
+    return _BG_CACHE[key].copy()
+
+
+def _render_background(doc) -> np.ndarray:
     bgd = doc.background
     H, W = doc.height, doc.width
     img = Image.new("RGB", (W, H), tuple(bgd.base))
@@ -237,26 +251,38 @@ def _fits(doc, mult):
     return True
 
 
-def _run_font(family, style, size, role, lost):
-    bold = (style in ("bold", "accent") and not lost) or role in ("title", "heading")
-    return get_font(family, bold, size)
+def _run_font(family, style, size, role, lost, exact=False, force_bold=False):
+    bold = force_bold or (style in ("bold", "accent") and not lost) or role in ("title", "heading")
+    return get_font(family, bold, size, exact)
 
 
-def _line_width(line, family, size, role, lost_keys, texts):
-    sp = get_font(family, False, size).getlength(" ")
+def _line_width(line, family, size, role, lost_keys, texts, exact=False, force_bold=False):
+    sp = get_font(family, False, size, exact).getlength(" ")
     w = 0.0
     for k, r in enumerate(line):
         t = texts[k] if texts else r.text
-        w += _run_font(family, r.style, size, role, k in lost_keys).getlength(t)
+        w += _run_font(family, r.style, size, role, k in lost_keys, exact, force_bold).getlength(t)
     return w + sp * max(0, len(line) - 1)
 
 
-def layout(doc, P=None):
-    """Return per-block list of lines: dict(x, y, h, runs=[(x, text, font, color)], text, w)."""
+def shift_color(c, v):
+    """Move a colour by v grey levels per channel towards mid-grey (dark ink gets lighter,
+    light ink on dark UIs gets darker), i.e. towards lower contrast."""
+    s = 1 if sum(c[:3]) / 3 < 128 else -1
+    return tuple(int(np.clip(ch + s * v, 0, 255)) for ch in c[:3])
+
+
+def layout(doc, P=None, local=None):
+    """Return per-block list of lines: dict(x, y, h, runs=[(x, text, font, color)], text, w).
+    local = one-block edit (ladder): {block, supersample, family, bold, size_mult, color_delta, dx, pitch_px}.
+    The local block is laid out with fonts at `supersample` x size (positions stay in page pixels) because
+    Pillow rasterises at whole-pixel sizes: a 1% size change only survives when drawn supersampled."""
     out = []
     for bi, b in enumerate(doc.blocks):
         span_of, _ = _span_ids(b)
         fam, size, spacing, dx, dy = b.family, b.size, 1.0, 0.0, 0.0
+        L = local if local is not None and local["block"] == bi else None
+        exact, force_bold, pitch_px, cdelta, ss = False, False, 0.0, 0, 1
         jit_rng = None
         if P is not None:
             f = P["font"]
@@ -270,8 +296,20 @@ def layout(doc, P=None):
                 size *= 1 - a["shrink"]
                 dx += a["shift"] * math.cos(a["angles"][bi])
                 dy += a["shift"] * math.sin(a["angles"][bi])
+        if local is not None and local.get("anchor") == bi:
+            dx += local.get("anchor_dx", 0.0)  # visual-anchor edit: move one heading/title
+        pitch_size = size
+        if L is not None:
+            fam = L.get("family") or fam
+            force_bold = bool(L.get("bold"))
+            ss = int(L.get("supersample", 1))
+            size, exact = size * L.get("size_mult", 1.0), True
+            dx += L.get("dx", 0.0)
+            pitch_px = L.get("pitch_px", 0.0)
+            cdelta = L.get("color_delta", 0)
         lines = []
-        lh = size * b.line_gap * spacing
+        # a ladder font-size edit keeps the original line pitch (isolates size from spacing)
+        lh = pitch_size * b.line_gap * spacing + pitch_px
         for j, line in enumerate(b.lines):
             lost = {k for k in range(len(line)) if P is not None and (bi, span_of.get((j, k), -1)) in P["emph_lost"]}
             texts = []
@@ -282,8 +320,13 @@ def layout(doc, P=None):
                     for ci, new in P["ocr_subs"][(bi, j, k)].items():
                         chars[ci] = new
                     t = "".join(chars)
+                if L is not None and (j, k) in L.get("ocr_subs", {}):
+                    chars = list(t)
+                    for ci, new in L["ocr_subs"][(j, k)].items():
+                        chars[ci] = new
+                    t = "".join(chars)
                 texts.append(t)
-            lw = _line_width(line, fam, size, b.role, lost, texts)
+            lw = _line_width(line, fam, size * ss, b.role, lost, texts, exact, force_bold) / ss
             if b.align == "center":
                 x0 = b.x + (b.w - lw) / 2
             elif b.align == "right":
@@ -293,14 +336,16 @@ def layout(doc, P=None):
             jitter = (jit_rng.uniform(-1, 1) * P["flow"]["jitter"] * size * b.line_gap) if jit_rng else 0.0
             y0 = b.y + j * lh + dy + jitter
             x0 += dx
-            sp = get_font(fam, False, size).getlength(" ")
+            sp = get_font(fam, False, size * ss, exact).getlength(" ") / ss
             runs, x = [], x0
             for k, r in enumerate(line):
-                font = _run_font(fam, r.style, size, b.role, k in lost)
+                font = _run_font(fam, r.style, size * ss, b.role, k in lost, exact, force_bold)
                 col = b.accent if (r.style == "accent" and k not in lost) else b.color
+                if cdelta:
+                    col = shift_color(col, cdelta)
                 runs.append((x, texts[k], font, tuple(col)))
-                x += font.getlength(texts[k]) + sp
-            lines.append({"x": x0, "y": y0, "w": lw, "h": size * 1.25, "runs": runs, "text": " ".join(texts)})
+                x += font.getlength(texts[k]) / ss + sp
+            lines.append({"x": x0, "y": y0, "w": lw, "h": size * 1.25, "runs": runs, "text": " ".join(texts), "ss": ss})
         out.append(lines)
     return out
 
@@ -309,6 +354,22 @@ def _draw_lines(draw, lines, alpha=255, offset=(0, 0)):
     for ln in lines:
         for (x, t, font, col) in ln["runs"]:
             draw.text((x + offset[0], ln["y"] + offset[1]), t, font=font, fill=tuple(col) + (alpha,))
+
+
+def _draw_lines_supersampled(canvas, lines, ss):
+    """Draw one block on an ss-times larger transparent layer and downsample it into the canvas."""
+    pad = int(math.ceil(max(l["h"] for l in lines) * 0.6)) + 2
+    x0 = max(0, int(math.floor(min(l["x"] for l in lines))) - pad)
+    y0 = max(0, int(math.floor(min(l["y"] for l in lines))) - pad)
+    x1 = min(canvas.width, int(math.ceil(max(l["x"] + l["w"] for l in lines))) + pad)
+    y1 = min(canvas.height, int(math.ceil(max(l["y"] + l["h"] for l in lines))) + pad)
+    layer = Image.new("RGBA", ((x1 - x0) * ss, (y1 - y0) * ss), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for ln in lines:
+        for (x, t, font, col) in ln["runs"]:
+            d.text(((x - x0) * ss, (ln["y"] - y0) * ss), t, font=font, fill=tuple(col) + (255,))
+    small = layer.convert("RGBa").resize((x1 - x0, y1 - y0), Image.LANCZOS).convert("RGBA")
+    canvas.alpha_composite(small, (x0, y0))
 
 
 def _draw_rule(draw, ru, sev, rng):
@@ -332,12 +393,101 @@ def _draw_rule(draw, ru, sev, rng):
                    ru.x1 + (ru.x2 - ru.x1) * b, ru.y1 + (ru.y2 - ru.y1) * b), fill=tuple(ru.color) + (255,), width=width)
 
 
+def _lines_bbox(lines, pad=3):
+    return [min(l["x"] for l in lines) - pad, min(l["y"] for l in lines) - pad,
+            max(l["x"] + l["w"] for l in lines) + pad, max(l["y"] + l["h"] for l in lines) + pad]
+
+
+def _measure_local(doc, L, bg_de, emph_total, orig_layout, rel_layout, tex=None):
+    """Measure what a one-block ladder edit actually changed and convert it to severities on the
+    same physical scales (PHYS) as the main releases. Convention: severity of the edited region."""
+    bi = L["block"]
+    b = doc.blocks[bi]
+    # Pillow draws at floor(px + 0.5) whole pixels, so measure the size that was really drawn
+    ss = int(L.get("supersample", 1))
+    mult = L.get("size_mult", 1.0)
+    drawn = lambda px: math.floor(round(px * 64) / 64 + 0.5)  # noqa: E731
+    size_mult = drawn(b.size * mult * ss) / drawn(b.size * ss) if mult != 1.0 else 1.0
+    fam = L.get("family") or b.family
+    fam_term = 0.0 if fam == b.family else (0.5 if FONT_FAMILIES[fam][0] == FONT_FAMILIES[b.family][0] else 1.0)
+    weight = 1.0 if L.get("bold") and b.role not in ("title", "heading") and any(
+        r.style == "normal" for ln in b.lines for r in ln) else 0.0
+    text_de = _de2000(_rgb2lab(np.array(b.color, float)), _rgb2lab(np.array(shift_color(b.color, L["color_delta"]), float))) \
+        if L.get("color_delta") else 0.0
+    dx = float(L.get("dx", 0.0))
+    pitch = float(L.get("pitch_px", 0.0)) if len(b.lines) > 1 else 0.0
+    pitch_rel = pitch / (b.size * b.line_gap)
+    bold_spans = 0
+    if L.get("bold"):
+        ids, _ = _span_ids(b)
+        styles = {}
+        for (j, k), s in ids.items():
+            styles[s] = b.lines[j][k].style
+        bold_spans = sum(1 for s in styles.values() if s == "bold")
+    font_sev = (PHYS["font_w_size"] * abs(size_mult - 1) / PHYS["font_max_size_delta"] + PHYS["font_w_family"] * fam_term
+                + PHYS["font_w_weight"] * weight + PHYS["font_w_color"] * min(1.0, text_de / PHYS["font_color_max_de"]))
+    severity = {
+        "font_similarity": min(1.0, font_sev),
+        "alignment_preservation": min(1.0, dx / math.hypot(PHYS["align_max_dx"], PHYS["align_max_dy"])),
+        "reading_flow": min(1.0, pitch_rel / PHYS["flow_max_spacing"]),
+        "background_fidelity": min(1.0, bg_de / PHYS["bg_max_delta_e"]),
+        "semantic_emphasis": (bold_spans / emph_total) if emph_total else 0.0,
+    }
+    n_alnum = sum(ch.isalnum() for ln in b.lines for r in ln for ch in r.text)
+    n_sub = sum(len(m) for m in L.get("ocr_subs", {}).values())
+    block_cer = n_sub / n_alnum if n_alnum else 0.0
+    tex = tex or {"loss": 0.0, "sigma": 0.0}
+    jpeg_q = int(L.get("jpeg_q") or PHYS["auth_jpeg_q_max"])
+    obj_dx, anchor_dx = float(L.get("obj_dx", 0.0)), float(L.get("anchor_dx", 0.0))
+    severity.update({
+        "ocr_accuracy": min(1.0, block_cer / PHYS["ocr_max_cer"]),
+        "ghost_text_residue": min(1.0, float(L.get("ghost_alpha", 0.0)) / PHYS["ghost_max_alpha"]),
+        "texture_continuity": float(tex["loss"]),
+        "lighting_consistency": min(1.0, float(L.get("light_drop", 0.0)) / PHYS["light_max_drop"]),
+        "authenticity": (PHYS["auth_jpeg_q_max"] - jpeg_q) / (PHYS["auth_jpeg_q_max"] - PHYS["auth_jpeg_q_min"]),
+        "object_preservation": min(1.0, obj_dx / PHYS["obj_max_shift"]),
+        "visual_anchor_integrity": min(1.0, anchor_dx / PHYS["anchor_max_shift"]),
+    })
+    ob, rb = _lines_bbox(orig_layout[bi]), _lines_bbox(rel_layout[bi])
+    boxes = [ob, rb]
+    if L.get("anchor") is not None:
+        boxes += [_lines_bbox(orig_layout[L["anchor"]]), _lines_bbox(rel_layout[L["anchor"]])]
+    if L.get("light_drop"):
+        boxes.append([rb[0] - 12, rb[1] - 12, rb[2] + 12, rb[3] + 12])
+    if L.get("object") is not None:
+        o = doc.objects[L["object"]]
+        boxes.append([o.x - 4, o.y - 4, o.x + o.w + obj_dx + 4, o.y + o.h + 4])
+    region = [int(math.floor(min(x[0] for x in boxes))), int(math.floor(min(x[1] for x in boxes))),
+              int(math.ceil(max(x[2] for x in boxes))), int(math.ceil(max(x[3] for x in boxes)))]
+    words = " ".join(line_text(l) for l in b.lines).split()
+    return {"severity": severity, "block_id": b.id, "block_role": b.role, "n_lines": len(b.lines),
+            "first_words": " ".join(words[:4]) + (" ..." if len(words) > 4 else ""), "page_size": [doc.width, doc.height],
+            "region_bbox": region, "size_mult": round(size_mult, 5), "family_from": b.family, "family_to": fam,
+            "family_term": fam_term, "weight_changed": bool(weight), "text_delta_e2000": round(text_de, 3),
+            "text_color_from": list(b.color[:3]),
+            "text_color_to": list(shift_color(b.color, L["color_delta"])) if L.get("color_delta") else list(b.color[:3]),
+            "dx_px": dx, "pitch_px": pitch, "pitch_rel": round(pitch_rel, 4), "bg_delta_e2000": round(bg_de, 3),
+            "emph_bold_spans_lost": bold_spans, "chars_substituted": n_sub, "block_alnum_chars": n_alnum,
+            "block_cer": round(block_cer, 5), "ghost_alpha": float(L.get("ghost_alpha", 0.0)),
+            "tex_loss": round(float(tex["loss"]), 5), "tex_sigma": round(float(tex["sigma"]), 4),
+            "light_drop": float(L.get("light_drop", 0.0)), "jpeg_q": jpeg_q, "obj_dx_px": obj_dx,
+            "object_kind": doc.objects[L["object"]].kind if L.get("object") is not None else None,
+            "anchor_dx_px": anchor_dx,
+            "anchor_block": doc.blocks[L["anchor"]].id if L.get("anchor") is not None else None,
+            "anchor_text": " ".join(line_text(l) for l in doc.blocks[L["anchor"]].lines)[:40] if L.get("anchor") is not None else None}
+
+
 # ------------------------------------------------------------------ main render
-def render(doc, sev: dict | None = None, seed: int = 0):
-    """Render the document. sev=None -> Original. Returns (PIL.Image, info)."""
+def render(doc, sev: dict | None = None, seed: int = 0, local: dict | None = None):
+    """Render the document. sev=None -> Original. Returns (PIL.Image, info).
+
+    local: optional one-block edit used by the minute-change ladder (prism/ladder.py):
+    {block: index, family, bold, size_mult, color_delta, dx, pitch_px, bg_delta}. Everything
+    outside that block is rendered exactly as the Original; the change is measured and merged
+    into the realised severities."""
     sev = {k: float(np.clip((sev or {}).get(k, 0.0), 0, 1)) for k in METRIC_KEYS}
     P = plan_release(doc, sev, seed)
-    is_orig = all(v == 0 for v in sev.values())
+    is_orig = all(v == 0 for v in sev.values()) and not local
     H, W = doc.height, doc.width
     bg = render_background(doc)
     canvas = Image.fromarray(bg.astype(np.uint8)).convert("RGBA")
@@ -357,15 +507,17 @@ def render(doc, sev: dict | None = None, seed: int = 0):
             tile = Image.fromarray(a)
         cx = obj.x + obj.w / 2 + op["shift"] * math.cos(op["angle"])
         cy = obj.y + obj.h / 2 + op["shift"] * math.sin(op["angle"])
+        if local and local.get("object") is not None and doc.objects[local["object"]] is obj:
+            cx += local.get("obj_dx", 0.0)
         canvas.alpha_composite(tile, (int(round(cx - tile.width / 2)), int(round(cy - tile.height / 2))))
 
     orig_layout = layout(doc, None)
-    rel_layout = orig_layout if is_orig else layout(doc, P)
+    rel_layout = orig_layout if is_orig else layout(doc, P, local)
 
     # --- inpainting patches over every original text region (the "removed then re-rendered" area)
     arr = np.asarray(canvas).astype(np.float32)
     patches = []
-    for lines in orig_layout:
+    for bi, lines in enumerate(orig_layout):
         if not lines:
             continue
         x0 = int(max(0, min(l["x"] for l in lines) - 3))
@@ -373,7 +525,7 @@ def render(doc, sev: dict | None = None, seed: int = 0):
         x1 = int(min(W, max(l["x"] + l["w"] for l in lines) + 3))
         y1 = int(min(H, max(l["y"] + l["h"] for l in lines) + 3))
         if x1 - x0 > 4 and y1 - y0 > 4:
-            patches.append((x0, y0, x1, y1))
+            patches.append((x0, y0, x1, y1, bi))
 
     tex_sigma, tex_realised, de_realised, area_tot = 0.0, 0.0, 0.0, 0.0
     if P["tex_loss_target"] > 0 and patches:
@@ -388,12 +540,30 @@ def render(doc, sev: dict | None = None, seed: int = 0):
                 hi = mid
         tex_sigma = (lo + hi) / 2
     nrng = np.random.default_rng(seed + 7)
-    for (x0, y0, x1, y1) in patches:
+    local_bg_de, local_bg_offset, local_tex = 0.0, 0, {"loss": 0.0, "sigma": 0.0}
+    for (x0, y0, x1, y1, bi) in patches:
         src = bg[y0:y1, x0:x1].copy()
         loss, p = _texture_loss(src, tex_sigma)
+        if local and local.get("tex_loss") and bi == local["block"]:
+            # texture smoothing: blur the paper grain of this one patch until the measured loss hits the target
+            lo, hi = 0.0, PHYS["tex_max_sigma"]
+            for _ in range(14):
+                mid = (lo + hi) / 2
+                if _texture_loss(src, mid)[0] < local["tex_loss"]:
+                    lo = mid
+                else:
+                    hi = mid
+            local_tex["sigma"] = (lo + hi) / 2
+            local_tex["loss"], p = _texture_loss(src, local_tex["sigma"])
         p = _chroma_shift(p, P["bg_delta_e"], P["bg_theta"])
         if P["auth_noise"] > 0:
             p = p + nrng.normal(0, P["auth_noise"], p.shape)
+        if local and local.get("bg_delta") and bi == local["block"]:
+            # inpaint colour mismatch: the re-filled patch is a few grey levels off (towards mid-grey)
+            local_bg_offset = (-1 if src.mean() >= 128 else 1) * int(local["bg_delta"])
+            p = p + local_bg_offset
+            local_bg_de = _de2000(_rgb2lab(src).reshape(-1, 3).mean(0),
+                                  _rgb2lab(np.clip(p, 0, 255)).reshape(-1, 3).mean(0))
         p = np.clip(p, 0, 255)
         area = (x1 - x0) * (y1 - y0)
         tex_realised += loss * area
@@ -410,10 +580,19 @@ def render(doc, sev: dict | None = None, seed: int = 0):
             _draw_lines(ImageDraw.Draw(layer), lines, int(255 * P["ghost_alpha"]), P["ghost_offset"])
         canvas.alpha_composite(layer.filter(ImageFilter.GaussianBlur(0.6)))
 
+    if local and local.get("ghost_alpha"):
+        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        _draw_lines(ImageDraw.Draw(layer), orig_layout[local["block"]], int(round(255 * local["ghost_alpha"])),
+                    local.get("ghost_offset", (2, 1)))
+        canvas.alpha_composite(layer.filter(ImageFilter.GaussianBlur(0.6)))
+
     # --- re-rendered text
     draw = ImageDraw.Draw(canvas)
     for lines in rel_layout:
-        _draw_lines(draw, lines)
+        if lines and lines[0].get("ss", 1) > 1:
+            _draw_lines_supersampled(canvas, lines, lines[0]["ss"])
+        else:
+            _draw_lines(draw, lines)
 
     out = np.asarray(canvas.convert("RGB")).astype(np.float32)
 
@@ -424,12 +603,33 @@ def render(doc, sev: dict | None = None, seed: int = 0):
         proj = (xx - W / 2) * math.cos(a) + (yy - H / 2) * math.sin(a)
         t = (proj - proj.min()) / (proj.max() - proj.min() + 1e-6)
         out *= (1 - P["light_drop"] * t)[..., None]
+    local_box = None
+    if local:
+        lb = _lines_bbox(rel_layout[local["block"]])
+        local_box = [max(0, int(math.floor(lb[0]))), max(0, int(math.floor(lb[1]))),
+                     min(W, int(math.ceil(lb[2]))), min(H, int(math.ceil(lb[3])))]
+    if local and local.get("light_drop"):
+        # uneven lighting on one block: a soft shadow, light_drop darker at its centre and fading to zero at
+        # every edge (raised-cosine profile, so there is no visible patch boundary)
+        x0, y0, x1, y1 = local_box
+        pad = 12
+        x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(W, x1 + pad), min(H, y1 + pad)
+        u = np.sin(np.pi * np.linspace(0, 1, x1 - x0, dtype=np.float32))
+        v = np.sin(np.pi * np.linspace(0, 1, y1 - y0, dtype=np.float32))
+        out[y0:y1, x0:x1] *= (1 - local["light_drop"] * (v[:, None] * u[None, :]))[..., None]
     img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
     # --- compression (authenticity); original also passes at q=95 for symmetry
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=P["jpeg_q"], subsampling=0 if P["jpeg_q"] >= 90 else 2)
     img = Image.open(io.BytesIO(buf.getvalue())).convert("RGB")
+    if local and local.get("jpeg_q"):
+        # re-saved patch: the block area (snapped to the 8x8 JPEG grid) is re-compressed at a lower quality
+        x0, y0 = local_box[0] // 8 * 8, local_box[1] // 8 * 8
+        x1, y1 = min(W, -(-local_box[2] // 8) * 8), min(H, -(-local_box[3] // 8) * 8)
+        b2 = io.BytesIO()
+        img.crop((x0, y0, x1, y1)).save(b2, "JPEG", quality=int(local["jpeg_q"]), subsampling=0)
+        img.paste(Image.open(io.BytesIO(b2.getvalue())).convert("RGB"), (x0, y0))
 
     # --- realised severities (ground truth)
     f = P["font"]
@@ -448,6 +648,12 @@ def render(doc, sev: dict | None = None, seed: int = 0):
         "semantic_emphasis": (len(P["emph_lost"]) / P["emph_total"]) if P["emph_total"] else 0.0,
         "authenticity": (PHYS["auth_jpeg_q_max"] - P["jpeg_q"]) / (PHYS["auth_jpeg_q_max"] - PHYS["auth_jpeg_q_min"]),
     }
+    local_info = None
+    if local:
+        local_info = _measure_local(doc, local, local_bg_de, P["emph_total"], orig_layout, rel_layout, local_tex)
+        local_info["bg_offset"] = local_bg_offset
+        for k, v in local_info["severity"].items():
+            realised[k] = max(realised[k], v)
     realised = {k: round(float(np.clip(v, 0, 1)), 4) for k, v in realised.items()}
 
     # examples for the reasoning text
@@ -492,6 +698,8 @@ def render(doc, sev: dict | None = None, seed: int = 0):
         "emph_lost": len(P["emph_lost"]), "emph_total": P["emph_total"],
         "jpeg_quality": P["jpeg_q"], "patch_noise_std": round(P["auth_noise"], 2),
     }
+    if local_info:
+        details["local"] = {k: v for k, v in local_info.items() if k != "severity"}
     info = {"realised_severity": realised, "details": details,
             "ocr_boxes_original": boxes(orig_layout), "ocr_boxes_release": boxes(rel_layout)}
     return img, info

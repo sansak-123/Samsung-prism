@@ -5,30 +5,10 @@ benchmark -> QLoRA fine-tuning -> CoT inference -> validation gate -> Python sco
 agreement analytics -> diagnostic audit.**
 
 ## How to run
-- **One command:** `./run_all.sh` runs every stage in order (each stage is resumable).
-- **Google Colab:** upload this folder (zipped as `prism_vlm.zip`) to Drive, open `colab_run_pipeline.ipynb`,
-  choose a GPU runtime, Run all.
-- **Kaggle (free 2x T4):** see `kaggle/` - `datagen` regenerates the dataset on CPU, `pipeline` runs the GPU
-  stages (baseline and QLoRA training in parallel, one GPU each) and stops cleanly before the 12 h limit;
-  `pipeline-resume` continues from that output.
-
-### Step by step
-1. `pip install torch` (matching your CUDA), then `pip install -r requirements.txt`
-   (`requirements-cpu.txt` is enough for stages 1-2 and the self-test).
-2. `python scripts/01_generate_dataset.py` - 700 samples -> 2,800 images; every `target_vs_realised_MAE`
-   in `data/metadata/generation_summary.json` should be < 0.05.
-3. `python scripts/02_build_splits.py` - must print `leakage_check passed`.
-4. `python scripts/make_pilot_showcase.py`, `python scripts/00_selftest.py` (prints `SELFTEST PASSED`),
-   `python scripts/export_annotation_sheet.py`.
-5. `python scripts/gpu_smoke_test.py` - must print `SMOKE TEST PASSED`; apply any RECOMMEND line to `configs/config.yaml`.
-6. `python scripts/03_prompt_study_and_baseline.py` - prompt study (P1-P4, validation) + zero-shot baseline (test).
-7. `python scripts/04_train_qlora.py` - QLoRA fine-tuning; best adapter chosen by validation MAE.
-8. `python scripts/05_infer.py --adapter outputs/best_adapter --name finetuned_qlora --split test`
-9. `python scripts/06_evaluate.py --models baseline_zero_shot finetuned_qlora --split test`
-   (add `--human_csv data/human/pilot_annotations.csv` if that file exists).
-
-Low-VRAM GPUs (T4, 15 GB): set `model.max_pixels: 501760`, `inference.batch_size: 2`, `train.epochs: 2`,
-`inference.prompt_study_n: 30` in `configs/config.yaml`.
+- **With Claude Code (local GPU):** open this folder in Claude Code and say
+  *"Follow CLAUDE.md and run the whole pipeline."* It handles setup, fixes and the final report.
+- **Manually:** see the numbered steps in `CLAUDE.md`, or `./run_all.sh`.
+- **Google Colab:** upload this zip to Drive, open `colab_run_pipeline.ipynb`, choose a GPU runtime, Run all.
 
 Hardware: NVIDIA GPU with >= 16 GB VRAM recommended (12 GB works with lower `max_pixels`).
 Rough times: dataset 15-30 min (CPU), prompt study + baseline 1-3 h, training 2-6 h, final inference 1-2 h.
@@ -55,15 +35,12 @@ actually produced**, and stores that measured value as ground truth. The release
 | Semantic Emphasis | fraction of bold/coloured phrases that lose styling |
 | Authenticity | JPEG quality 95 -> 20 plus noise in edited regions |
 
-**8 finalised English templates:** invoice, receipt, certificate, application form, business letter,
-restaurant menu, event flyer, mobile settings screen - all randomised (names, items, prices, colours,
+**23 English templates:** invoice, receipt, certificate, application form, business letter,
+restaurant menu, event flyer, mobile settings screen, bank statement, payslip, boarding pass, medical
+prescription, resume, newsletter, nutrition label, ID card, shipping label, report card, utility bill,
+email, web landing page, chat screenshot, presentation slide (incl. dark-mode and landscape variants) - all randomised (names, items, prices, colours,
 fonts from 11 bundled open-licence families, paper texture, logos, stamps, QR codes, signatures, photos).
 Drop your own photos into `assets/photos/` and the flyer/menu/form photo areas will use them.
-
-### Included dataset
-The generated dataset is committed in `data/`: 700 samples (`data/images/sample_XXXX/{original,R1,R2,R3}.png`,
-2,800 images), full metadata and the train/val/test pairs, so stages 1-2 can be skipped. Regenerating with
-`scripts/01_generate_dataset.py` reproduces it (seeded).
 
 ### Metadata
 - `data/metadata/samples.jsonl` - one record per sample: template, seed, original path, `ocr_data`
@@ -73,8 +50,15 @@ The generated dataset is committed in `data/`: 700 samples (`data/images/sample_
 - `data/metadata/metadata.csv` - one row per Original-Release pair (opens in Excel).
 - `data/pairs/{train,val,test}.jsonl` - pairwise training records (Original + one release + CoT/JSON target),
   split 70/15/15 **by sample_id** (no leakage), stratified by template.
+- **Minute-change ladder** (`prism/ladder.py`): per ladder Original 1 unchanged control + 52 releases =
+  13 single-factor edit families x 4 minute levels. The first 6 families are the prism_iqa "24 generation"
+  (font family, font size x1.01-1.10, font colour +2-20, inpaint colour 1-12, justification 1-8 px, line
+  spacing +1-8 px); 7 more (look-alike characters, ghost text, grain smoothing, soft shadow, local JPEG,
+  object shift, heading shift) give 11 of the 12 metrics their own ladder. Scores are measured during
+  generation, each with its written-out formula; `scripts/check_ladder_scores.py` re-computes all of them.
+  Output also in the `metadata_real.json` schema (`data/metadata/metadata_ladder.json`).
 - `pilot/` - **5 images per artifact type** (each changes one metric only) with contact sheets in
-  `pilot/sheets/` and `pilot_metadata.json` - this is the batch to show Ramesh and Mimat.
+  `pilot/sheets/` and `pilot_metadata.json` - a visual sanity check of each artifact type.
 
 ## Model pipeline (matches the Training & Evaluation slide)
 1. Training inputs - pairwise JSONL, Qwen2.5-VL processor (image tokens never truncated), 4-bit NF4 base.
@@ -94,15 +78,34 @@ Per metric, per category, overall and per template: MAE, RMSE, PLCC, SROCC, bias
 best-release accuracy, exact R1/R2/R3 ranking accuracy, Kendall tau, pairwise preference accuracy.
 Coverage: valid-output rate after the gate. Baseline vs fine-tuned side by side.
 
-## Optional human check
-`scripts/export_annotation_sheet.py` creates a 20-pair sheet for 3 annotators. Save the filled file as
-`data/human/pilot_annotations.csv`; the evaluation then reports human sigma, the human-ceiling error per
-metric, and how well the pre-defined scores match human judgement.
+## What makes PRISM different
+1. **It measures the smallest change a VLM can see.** Each of 13 defect types comes in 4 minute levels, so
+   the evaluation reports a just-noticeable level per defect, instead of hiding blindness inside an average
+   (a model blind to every change below 0.05 still gets a pooled MAE of ~0.009).
+2. **Ground truth with zero manual annotation that anyone can audit.** Every score is computed from what was
+   drawn (dE2000, pixels, % of characters) and ships with its formula; one script re-computes all of them and
+   cross-checks the pixels.
+3. **It knows WHAT is wrong and WHERE, and whether its explanation is true.** Training targets name the
+   region; the evaluation scores location and quantity in the model's own explanation.
+4. **It does not confuse defects.** Single-factor edits give an edit x metric leakage matrix and an
+   attribution-precision score - impossible with mixed-defect datasets.
+5. **It acts, not just grades.** `07_judge.py` returns ACCEPT/REJECT, the failing metric, the region and the
+   repair action for any original/edited pair; the evaluation reports gate accuracy and diagnosis accuracy.
+6. **It improves itself.** `08_data_engine.py` generates new training data only for the defects the model
+   still misses, round after round.
+7. **It generalises and scales.** 23 document/UI types with an unseen-template test option; the same code
+   runs a 3B model on a free T4 (fp16) or a 7B/32B model on bigger GPUs (config presets).
+8. **Sanity built in.** Unchanged controls measure false alarms; ordering across levels measures consistency.
+
+## No manual annotation
+Every ground-truth score is computed automatically by the renderer during generation (stage 1) and
+used directly for training and evaluation. There is no annotation sheet, rater step or human-label input.
 
 ## Layout
 ```
 configs/config.yaml        all settings
 prism/                     library (templates, renderer, metrics, prompts, gate, scoring, evaluation, report, vlm)
-scripts/00..06             stages; gpu_smoke_test.py; make_pilot_showcase.py; export_annotation_sheet.py
+scripts/00..08             stages (07 judge any pair, 08 data engine); gpu_smoke_test.py;
+                           make_pilot_showcase.py; check_ladder_scores.py
 assets/fonts               bundled open-licence fonts (DejaVu, Liberation, Carlito, Caladea, Poppins, FreeFont)
 ```

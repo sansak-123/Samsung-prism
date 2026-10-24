@@ -114,8 +114,74 @@ def main():
         check(0.8 < m["coverage"]["valid_rate"] < 0.97, f"malformed outputs caught by gate (valid rate {m['coverage']['valid_rate']:.2f})")
         check(os.path.exists(os.path.join(P(cfg, "reports_dir"), "selftest", "evaluation_metrics.xlsx")), "xlsx report written")
 
+    print("[6] minute-change ladder (3 Originals, all edit families)")
+    import tempfile
+    from prism.common import abspath
+    from prism.evaluation import ladder_sensitivity
+    from prism.ladder import KNOB_METRIC, ORDINAL_KNOBS, make_ladder_sample
+    lcfg = dict(cfg, paths=dict(cfg["paths"], images_dir=os.path.relpath(tempfile.mkdtemp(prefix="prism_ladder_"), ROOT)))
+    recs = [make_ladder_sample(lcfg, i) for i in (0, 9, 20)]
+    for rec in recs:
+        rels = {x["release_id"]: x for x in rec["releases"]}
+        o = np.asarray(_open(abspath(rec["original_image_path"])))
+        c = np.asarray(_open(abspath(rels["control_0"]["release_image_path"])))
+        check(np.array_equal(o, c), f"{rec['template']}: control identical to Original")
+        check(all(x["render_audit"]["changed_pixels_outside_region"] == 0 for x in rec["releases"]),
+              f"{rec['template']}: no pixel changed outside the edited block")
+        check(all(not x["render_audit"]["no_visible_change"] for x in rec["releases"] if x["release_id"] != "control_0"),
+              f"{rec['template']}: every one of the {len(rec['releases']) - 1} edits changes pixels")
+        for knob in [k for k in ORDINAL_KNOBS if k in rec["knobs"]]:
+            s = [rels[f"{knob}_{lv}"]["scores"][KNOB_METRIC[knob]] for lv in range(1, 5)]
+            check(all(a >= b for a, b in zip(s, s[1:])) and s[0] < 1.0, f"{rec['template']}: {knob} scores ordered {s}")
+        side = [k for x in rec["releases"] if x["artifact_type"] in ORDINAL_KNOBS
+                for k in METRIC_KEYS if k != x["primary_metric"] and x["scores"][k] != 1.0]
+        check(not side, f"{rec['template']}: ordinal edits move only their own metric {sorted(set(side))}")
+    spec = importlib.util.spec_from_file_location("chk", os.path.join(ROOT, "scripts", "check_ladder_scores.py"))
+    chk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(chk)
+    bad = [(x["release_id"], k) for r in recs for x in r["releases"]
+           for k, s in chk.severities(x["control_parameters"]["local"], x["control_parameters"]["emph_total"]).items()
+           if abs(round(1 - round(min(1.0, max(0.0, s)), 4), 2) - x["scores"][k]) > 0.0100001]
+    check(not bad, f"every ladder score re-computes from its stored measurements {bad[:3]}")
+    check(all(px for r in recs for x in r["releases"] for _, px in chk.pixel_checks(x) if x["artifact_type"] == "control"),
+          "pixel evidence: controls are pixel-identical")
+    tgt = lambda x: ("<analysis>" + chr(10) + x["reasoning"] + chr(10) + "</analysis>" + chr(10))  # noqa: E731
+    lrows = [{"sample_id": r["sample_id"], "release_id": x["release_id"], "kind": "ladder", "artifact_type": x["artifact_type"],
+              "level": x["level"], "artifact_value": x["artifact_value"], "primary_metric": x["primary_metric"],
+              "gt": x["scores"], "pred": x["scores"], "target": tgt(x), "raw": tgt(x)} for r in recs for x in r["releases"]]
+    from prism.evaluation import explanation_check, quality_gate
+    from prism.judge import verdict
+    ex = explanation_check(lrows)
+    check(ex["location_accuracy"] == 1.0 and ex["quantity_accuracy"] == 1.0 and ex["n_quantity"] > 50,
+          f"explanation check: a truthful explanation scores 1.0 ({ex['n_quantity']} quantities)")
+    g = quality_gate(lrows, 0.95)
+    check(g["decision_accuracy"] == 1.0 and g["diagnosis_accuracy"] == 1.0, "quality gate: oracle decides and diagnoses perfectly")
+    import re
+    def lie(t):  # every reported quantity x -> 3x + 5, every location swapped
+        t = re.sub(r"(\d+(?:\.\d+)?)(\s*(?:px|%))", lambda m: f"{float(m.group(1)) * 3 + 5:g}{m.group(2)}", t)
+        return t.replace("top", "TMP").replace("bottom", "top").replace("TMP", "bottom")
+    lied = explanation_check([dict(x, raw=lie(x["raw"])) for x in lrows])
+    check(lied["quantity_accuracy"] == 0.0 and lied["location_accuracy"] < 1.0,
+          f"explanation check: catches wrong quantities and locations ({lied['quantity_accuracy']}, {lied['location_accuracy']:.2f})")
+    v = verdict({k: (0.80 if k == "reading_flow" else 1.0) for k in METRIC_KEYS})
+    check(v["decision"] == "REJECT" and v["flags"][0]["metric"] == "reading_flow", "judge verdict: flags the failing metric")
+    oracle = ladder_sensitivity(lrows)
+    check(all(v and v["level"] == 1 for v in oracle["jnd"].values()) and oracle["control"]["false_alarm_rate"] == 0,
+          "ladder analysis: oracle detects every level-1 edit with no false alarms")
+    const = ladder_sensitivity([dict(x, pred={k: 0.9 for k in METRIC_KEYS}) for x in lrows])
+    check(all(v is None for v in const["jnd"].values()) and const["control"]["false_alarm_rate"] == 1,
+          "ladder analysis: constant predictor detects nothing and always false-alarms")
+    import shutil
+    shutil.rmtree(os.path.join(ROOT, lcfg["paths"]["images_dir"]), ignore_errors=True)
+
     print("\nSELFTEST", "FAILED: " + "; ".join(FAIL) if FAIL else "PASSED")
     sys.exit(1 if FAIL else 0)
+
+
+def _open(path):
+    from PIL import Image
+    with Image.open(path) as im:
+        return im.convert("RGB")
 
 
 def _dummy_details():

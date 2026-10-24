@@ -22,7 +22,10 @@ from .validation import validate_output
 
 
 def compute_dtype():
-    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+    """bf16 only on GPUs with native bf16 (Ampere, compute capability >= 8: A100, L4, A10, RTX 30xx+).
+    torch.cuda.is_bf16_supported() also returns True on a T4 (sm_75) where bf16 is only emulated, which made
+    Kaggle T4 training ~688 s per optimizer step; T4 / P100 / V100 therefore use native fp16."""
+    if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8 and torch.cuda.is_bf16_supported():
         return torch.bfloat16
     return torch.float16
 

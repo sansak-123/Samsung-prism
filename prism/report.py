@@ -104,8 +104,29 @@ def _plot_band_confusion(rows, name, path):
     plt.close(fig)
 
 
+def _plot_ladder(results, path):
+    knobs = ["font_size", "font_color", "inpaint_color_mismatch", "justification", "line_spacing", "font_family"]
+    fig, axes = plt.subplots(1, len(knobs), figsize=(3.0 * len(knobs), 3.0), sharey=True)
+    for ax, knob in zip(axes, knobs):
+        for n, r in results.items():
+            rows = sorted((x for x in (r.get("ladder") or {}).get("rows", []) if x["artifact_type"] == knob),
+                          key=lambda x: x["level"])
+            if rows:
+                ax.plot([x["level"] for x in rows], [x["detection_rate"] for x in rows], marker="o", label=n)
+        ax.axhline(0.5, color="#999", lw=0.8, ls="--")
+        ax.set_title(knob, fontsize=9)
+        ax.set_xticks([1, 2, 3, 4])
+        ax.set_ylim(-0.02, 1.02)
+        _style(ax)
+    axes[0].set_ylabel("detection rate")
+    axes[-1].legend(fontsize=7, frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
 def write_report(results: dict, rows_by_model: dict, out_dir: str, title: str = "PRISM VLM evaluation",
-                 extra: dict | None = None, human: dict | None = None):
+                 extra: dict | None = None):
     os.makedirs(out_dir, exist_ok=True)
     fig_dir = os.path.join(out_dir, "figures")
     os.makedirs(fig_dir, exist_ok=True)
@@ -147,13 +168,15 @@ def write_report(results: dict, rows_by_model: dict, out_dir: str, title: str = 
             pd.DataFrame(r["failure_patterns"]).to_excel(xw, sheet_name=f"patterns_{short}"[:31], index=False)
             pd.DataFrame(r["top_errors"][:500]).to_excel(xw, sheet_name=f"top_err_{short}"[:31], index=False)
             pd.DataFrame(r["ranking_rows"]).to_excel(xw, sheet_name=f"rank_{short}"[:31], index=False)
-        if human:
-            pd.DataFrame([{"metric": METRIC_NAMES[k], **v} for k, v in human.items()]).to_excel(xw, sheet_name="human_ceiling", index=False)
+            if r.get("ladder"):
+                pd.DataFrame(r["ladder"]["rows"]).to_excel(xw, sheet_name=f"ladder_{short}"[:31], index=False)
     for n, r in results.items():
         pd.DataFrame(r["ranking_rows"]).to_csv(os.path.join(out_dir, f"release_rankings_{n}.csv"), index=False)
 
     # ---------------- figures
     _plot_mae(results, os.path.join(fig_dir, "mae_per_metric.png"))
+    if any(r.get("ladder") for r in results.values()):
+        _plot_ladder(results, os.path.join(fig_dir, "ladder_sensitivity.png"))
     for n in names:
         _plot_scatter(rows_by_model[n], n, os.path.join(fig_dir, f"scatter_{n}.png"))
         _plot_band_confusion(rows_by_model[n], n, os.path.join(fig_dir, f"band_confusion_{n}.png"))
@@ -217,13 +240,46 @@ def write_report(results: dict, rows_by_model: dict, out_dir: str, title: str = 
         for k in METRIC_KEYS:
             v = list(r["error_by_severity"][k].values())
             L.append(f"| {METRIC_NAMES[k]} | " + " | ".join(_fmt(x["MAE"]) for x in v) + " |")
-    if human:
-        L += ["", "## Human-ceiling check (pilot annotations vs pre-defined scores)", "",
-              "| Metric | Human sigma | Human ceiling error | Human vs pre-defined MAE |", "|---|---|---|---|"]
-        for k in METRIC_KEYS:
-            h = human[k]
-            L.append(f"| {METRIC_NAMES[k]} | {_fmt(h['mean_sigma'])} | {_fmt(h['human_ceiling_error'])} | {_fmt(h['human_vs_predefined_MAE'])} |")
-        L += ["", "A metric whose model MAE is close to its human-ceiling error is limited by subjectivity, not by the model."]
+    for n in names:
+        lad = results[n].get("ladder")
+        if not lad:
+            continue
+        c = lad["control"]
+        L += ["", f"## Minute-change sensitivity (ladder) - {n}", "",
+              f"{lad['n_originals']} Originals x (1 control + 6 edits x 4 levels). Detection = predicted primary-metric "
+              f"score below the model's own prediction for the unchanged control. Controls: false-alarm rate "
+              f"{_fmt(c['false_alarm_rate'])} (any metric < 0.98 on an identical image), mean overall {_fmt(c['mean_pred_overall'])}.", "",
+              "| Edit | Level | Value | Primary metric | GT mean | Pred mean | MAE | Detection rate |", "|---|---|---|---|---|---|---|---|"]
+        for row in lad["rows"]:
+            L.append(f"| {row['artifact_type']} | {row['level']} | {row['value']} | {METRIC_NAMES[row['primary_metric']]} | "
+                     f"{_fmt(row['gt_mean'])} | {_fmt(row['pred_mean'])} | {_fmt(row['MAE'])} | {_fmt(row['detection_rate'])} |")
+        prec = lad.get("attribution_precision", {})
+        if prec:
+            L += ["", "Attribution precision (share of the predicted score drop that lands on the edited metric; "
+                      "1.0 = the model blames exactly the right metric):", "",
+                  "| Edit | Attribution precision | Largest wrongly-blamed metric |", "|---|---|---|"]
+            for knob, pv in sorted(prec.items()):
+                d = {k: v for k, v in lad["leakage"][knob].items()}
+                prim = [r["primary_metric"] for r in lad["rows"] if r["artifact_type"] == knob][:1]
+                other = min((k for k in d if not prim or k != prim[0]), key=lambda k: d[k], default=None)
+                L.append(f"| {knob} | {_fmt(pv)} | {METRIC_NAMES.get(other, '-')} ({_fmt(d.get(other))}) |")
+        L += ["", "| Edit | Just-noticeable level (>= 50% detected) | Mean Spearman(level, pred) | Flat Originals |", "|---|---|---|---|"]
+        for knob, m in lad["monotonicity"].items():
+            j = lad["jnd"].get(knob)
+            jtxt = "not reached" if not j else "L{} ({})".format(j["level"], j["value"])
+            L.append(f"| {knob} | {jtxt} | {_fmt(m['mean_spearman'])} | {m['n_flat']} |")
+    L += ["", "## Quality gate (accept / reject) and explanation check", "",
+          "| Measure | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
+    gate_rows = [("Gate threshold", lambda r: r["quality_gate"]["threshold"]),
+                 ("Decision accuracy", lambda r: r["quality_gate"]["decision_accuracy"]),
+                 ("Reject precision", lambda r: r["quality_gate"]["reject_precision"]),
+                 ("Reject recall", lambda r: r["quality_gate"]["reject_recall"]),
+                 ("False-reject rate", lambda r: r["quality_gate"]["false_reject_rate"]),
+                 ("Diagnosis accuracy (right metric blamed)", lambda r: r["quality_gate"]["diagnosis_accuracy"]),
+                 ("Explanation: location correct", lambda r: r.get("explanations", {}).get("location_accuracy")),
+                 ("Explanation: quantity correct", lambda r: r.get("explanations", {}).get("quantity_accuracy"))]
+    for label, fn in gate_rows:
+        L.append(f"| {label} | " + " | ".join(_fmt(fn(results[n])) for n in names) + " |")
     L += ["", "## Files", "", "- `evaluation_metrics.xlsx` - every table above plus top errors and per-sample rankings",
           "- `release_rankings_<model>.csv` - per sample: ground-truth vs predicted R1/R2/R3 ranking and best release",
           "- `figures/` - MAE per metric, GT-vs-prediction scatter per metric, quality-band confusion"]

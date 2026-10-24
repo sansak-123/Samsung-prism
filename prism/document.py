@@ -31,10 +31,17 @@ for _n, (_c, _r, _b) in FONT_FAMILIES.items():
     FAMILIES_BY_CLASS.setdefault(_c, []).append(_n)
 
 
+def get_font(family: str, bold: bool, size: float, exact: bool = False) -> ImageFont.FreeTypeFont:
+    """Sizes are quantised to 1/4 px (cache-friendly). exact=True keeps 1/64 px (FreeType's own
+    precision) so the ladder's 1% size steps are not rounded away."""
+    return _font(family, bold, round(size * 64) / 64 if exact else round(size * 4) / 4)
+
+
 @lru_cache(maxsize=4096)
-def get_font(family: str, bold: bool, size: float) -> ImageFont.FreeTypeFont:
+def _font(family: str, bold: bool, size: float) -> ImageFont.FreeTypeFont:
     _, reg, bld = FONT_FAMILIES[family]
-    return ImageFont.truetype(os.path.join(FONT_DIR, bld if bold else reg), round(size * 4) / 4)
+    return ImageFont.truetype(os.path.join(FONT_DIR, bld if bold else reg), size)
+
 
 
 @dataclass

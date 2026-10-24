@@ -75,8 +75,63 @@ def build_reasoning(realised: dict, d: dict) -> str:
     L.append("Authenticity: clean rendering" if _none(sv["authenticity"])
              else f"Authenticity: compression/noise artifacts (JPEG quality ~{d['jpeg_quality']})")
 
+    if d.get("local"):
+        _local_lines(L, sv, d["local"], d.get("emph_total", 0))
     lines = [f"- {txt} -> {s[k]:.2f}" for txt, k in zip(L, METRIC_KEYS)]
     return "\n".join(lines)
+
+
+def position_phrase(bbox, width, height) -> str:
+    cx, cy = (bbox[0] + bbox[2]) / 2 / width, (bbox[1] + bbox[3]) / 2 / height
+    v = "top" if cy < 1 / 3 else ("middle" if cy < 2 / 3 else "bottom")
+    h = "left" if cx < 0.4 else ("right" if cx > 0.6 else "centre")
+    return f"{v}-{h}" if h != "centre" else v
+
+
+def _local_lines(L, sv, loc, emph_total):
+    """Ladder releases: one block changed. Describe the measured change and WHERE it is, even when it
+    is below the usual 'no change' threshold (the point of the ladder is minute changes)."""
+    where = f'the {position_phrase(loc["region_bbox"], *loc["page_size"])} block "{loc["first_words"]}"'
+    idx = {k: i for i, k in enumerate(METRIC_KEYS)}
+    if sv["font_similarity"] > 0:
+        parts = []
+        if loc["family_term"]:
+            parts.append("similar but different typeface" if loc["family_term"] == 0.5 else "typeface of a different style class")
+        if loc["weight_changed"]:
+            parts.append("set entirely in bold")
+        dm = (loc["size_mult"] - 1) * 100
+        if abs(dm) > 1e-6:
+            parts.append(f"text {abs(dm):.1f}% {'larger' if dm > 0 else 'smaller'}")
+        if loc["text_delta_e2000"] > 0:
+            parts.append(f"ink colour slightly faded (dE2000 ~{loc['text_delta_e2000']:.1f})")
+        L[idx["font_similarity"]] = f"Font: in {where}, " + ", ".join(parts)
+    if sv["alignment_preservation"] > 0:
+        L[idx["alignment_preservation"]] = f"Alignment: {where} shifted {loc['dx_px']:.0f}px to the right"
+    if sv["reading_flow"] > 0:
+        L[idx["reading_flow"]] = (f"Reading flow: line spacing in {where} increased by {loc['pitch_px']:.0f}px "
+                                  f"(+{loc['pitch_rel'] * 100:.0f}%)")
+    if sv["background_fidelity"] > 0:
+        L[idx["background_fidelity"]] = (f"Background: re-filled patch behind {where} is slightly off-colour "
+                                         f"(dE2000 ~{loc['bg_delta_e2000']:.1f})")
+    if sv["semantic_emphasis"] > 0:
+        L[idx["semantic_emphasis"]] = (f"Emphasis: {loc['emph_bold_spans_lost']}/{emph_total} bold phrases no longer "
+                                       f"stand out because {where} is all bold")
+    if sv["ocr_accuracy"] > 0 and loc.get("chars_substituted"):
+        n = loc["chars_substituted"]
+        L[idx["ocr_accuracy"]] = (f"OCR: {n} character{'s' if n > 1 else ''} in {where} replaced by look-alikes "
+                                  f"({loc['block_cer'] * 100:.1f}% of the block)")
+    if sv["ghost_text_residue"] > 0 and loc.get("ghost_alpha"):
+        L[idx["ghost_text_residue"]] = f"Ghost text: faint copy of the old glyphs behind {where} at ~{loc['ghost_alpha'] * 100:.0f}% opacity"
+    if sv["texture_continuity"] > 0 and loc.get("tex_loss"):
+        L[idx["texture_continuity"]] = f"Texture: paper grain behind {where} smoothed (~{loc['tex_loss'] * 100:.0f}% of the detail lost)"
+    if sv["lighting_consistency"] > 0 and loc.get("light_drop"):
+        L[idx["lighting_consistency"]] = f"Lighting: soft shadow over {where}, up to {loc['light_drop'] * 100:.0f}% darker at its centre"
+    if sv["authenticity"] > 0 and loc.get("jpeg_q", 95) < 95:
+        L[idx["authenticity"]] = f"Authenticity: {where} re-saved with stronger compression (JPEG quality ~{loc['jpeg_q']})"
+    if sv["object_preservation"] > 0 and loc.get("obj_dx_px"):
+        L[idx["object_preservation"]] = f"Objects: the {loc['object_kind']} moved {loc['obj_dx_px']:.0f}px to the right"
+    if sv["visual_anchor_integrity"] > 0 and loc.get("anchor_dx_px"):
+        L[idx["visual_anchor_integrity"]] = f"Anchors: heading \"{loc['anchor_text']}\" moved {loc['anchor_dx_px']:.0f}px to the right"
 
 
 def build_target(realised: dict, details: dict) -> str:

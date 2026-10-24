@@ -40,6 +40,9 @@ PHYS = {
     "font_max_size_delta": 0.35,  # +-35% font size
     "font_w_size": 0.6,           # font severity = 0.6*size_term + 0.4*family_term
     "font_w_family": 0.4,
+    "font_w_weight": 0.2,         # ladder only: regular -> bold weight change of a whole block
+    "font_w_color": 0.6,          # ladder only: text colour change, scaled by dE2000 / font_color_max_de
+    "font_color_max_de": 25.0,
     "obj_max_scale_loss": 0.40,   # objects shrink up to 40%
     "obj_max_shift": 30.0,        # px
     "obj_max_fade": 0.70,         # opacity loss
