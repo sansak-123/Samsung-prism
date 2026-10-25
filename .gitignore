@@ -11,3 +11,5 @@ reports/
 *.log
 # dataset images (regenerate with scripts/01_generate_dataset.py)
 data/images/
+# locally downloaded model weights (see model.local_dir in configs/config.yaml)
+models/
