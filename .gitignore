@@ -9,7 +9,9 @@ predictions/
 outputs/
 reports/
 *.log
-# dataset images (regenerate with scripts/01_generate_dataset.py)
+# generated dataset (regenerate with scripts/01_generate_dataset.py and 02_build_splits.py)
 data/images/
+data/metadata/
+data/pairs/
 # locally downloaded model weights (see model.local_dir in configs/config.yaml)
 models/
