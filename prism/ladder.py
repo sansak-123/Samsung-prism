@@ -294,8 +294,8 @@ def make_ladder_sample(cfg: dict, i: int) -> dict:
     templates = lc.get("templates") or cfg["dataset"]["templates"]
     sid = f"ladder_{i:04d}"
     choice, doc, doc_seed, template = None, None, None, None
-    # a template first retries with new document seeds; templates that never have a usable multi-line
-    # body block (restaurant_menu, mobile_settings) fall through to the next template
+    # a template first retries with new document seeds; a template that never has a usable multi-line
+    # body block falls through to the next template
     for k in range(len(templates) * 6):
         template = templates[(i + k // 6) % len(templates)]
         doc_seed = seed * 100003 + 500000 + i * 997 + k

@@ -259,8 +259,8 @@ def restaurant_menu(r: random.Random) -> Document:
             add_block(d, f"desc{y}", desc, 70, y + 25, 520, "small", 13, fam_b, color=tuple(int(c * 0.8 + 40) for c in ink) if dark else (100, 100, 100))
             y += 62
         y += 12
-    add_block(d, "foot", "All prices in INR, inclusive of taxes. Please inform us of any **dietary requirements**.",
-              70, 975, 628, "small", 12, fam_b, "center", ink)
+    add_block(d, "foot", ["All prices in INR, inclusive of taxes.", "Please inform us of any **dietary requirements**."],
+              70, 970, 628, "small", 12, fam_b, "center", ink)
     return d
 
 
@@ -322,6 +322,8 @@ def mobile_settings(r: random.Random) -> Document:
         if i % 4 != 3:
             d.rules.append(Rule(108, y + 83, W - 48, y + 83, 1, (60, 60, 66) if dark else (225, 225, 230)))
         y += 84
+    add_block(d, "about", [f"Software version {r.randint(12, 15)}.{r.randint(0, 9)}  |  Build {r.randint(100000, 999999)}",
+                           f"Last checked for updates on {_date(r)}"], 40, 962, 600, "small", 13, fam, color=sub)
     return d
 
 

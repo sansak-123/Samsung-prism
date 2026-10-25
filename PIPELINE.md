@@ -20,12 +20,12 @@ All settings: `configs/config.yaml`. Every stage is resumable (re-running skips 
   generated on Windows works on Linux (Kaggle/Colab).
 
 ## [1] Dataset: the "24 generation" ladder - `scripts/01_generate_dataset.py`, `prism/ladder.py`
-Per Original `i` (147 Originals = 7 per template, multiprocessing pool): `control_0` + **6 edit families x
+Per Original `i` (300 Originals = 13 per template, multiprocessing pool): `control_0` + **6 edit families x
 4 levels = 24 releases**, each changing ONE thing (one multi-line text block) - the prism_iqa "24 generation"
 (github.com/Sanjana432/prism_iqa `LADDERS`). `ladder.knobs` selects the families; 7 more exist (11 of the
 12 metrics then get their own ladder, 52 releases per Original).
 
-1. **Document** - `prism/templates.py`, `document.py`, `objects.py`: one of 21 templates (`ladder.templates`),
+1. **Document** - `prism/templates.py`, `document.py`, `objects.py`: one of the 23 templates (`dataset.templates`),
    seeded text, prices, names, colours, 11 bundled font families, paper texture, logos, stamps, QR codes,
    signatures, photos. A multi-line body block is chosen that no edit can push into other content.
 2. **Edits** - each release re-renders the Original with one local change; pixels outside the edited block
@@ -70,7 +70,7 @@ actually drawn, on the physical scales in `metrics.PHYS`.
   lines name the region (e.g. `in the top-right block "Bill To Karthik ..."`).
 - Outputs: `data/images/ladder_XXXX/`, `ladder.jsonl`, `ladder_metadata.csv`, `ladder_summary.json`,
   `metadata_ladder.json` (metadata_real.json schema with measured `metric_scores`, plus trailing
-  `score_calculation` and `pixel_measurements`). 147 x 26 = 3,822 PNG.
+  `score_calculation` and `pixel_measurements`). 300 x 26 = 7,800 PNG.
 - Ladder evaluation (part of `06_evaluate.py`): detection rate per level (prediction below the model's
   own control prediction), just-noticeable level (>= 50 % detected), Spearman(level, prediction), false-alarm
   rate on the identical controls, **attribution precision** (share of the predicted drop that lands on the
@@ -78,7 +78,7 @@ actually drawn, on the physical scales in `metrics.PHYS`.
 
 ## [2] Leakage-free splits + pairwise records - `scripts/02_build_splits.py`
 - Group by `sample_id`, stratify by template, shuffle with the seed: 70 / 15 / 15 ->
-  105 / 21 / 21 Originals = **2,625 / 525 / 525 pairs** (control + 24 releases each).
+  208 / 46 / 46 Originals = **5,200 / 1,150 / 1,150 pairs** (control + 24 releases each).
 - One record per (Original, Release): image paths, `prompt_id = P4`, `scores`, and
   `target = "<analysis>\n" + reasoning + "\n</analysis>\n" + JSON(12 scores)`.
 - Assertion: every `sample_id` appears in exactly one split -> `split_manifest.json`.

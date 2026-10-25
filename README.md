@@ -28,15 +28,14 @@ and stores all 12 metric scores as ground truth - no manual annotation.
 | justification | 1, 2, 4, 8 px | Alignment Preservation |
 | line_spacing | +1, +2, +4, +8 px | Reading Flow |
 
-147 Originals (7 per template) x 25 = **3,675 pairs** (3,822 images incl. the Originals). `ladder.knobs` can
+300 Originals (13 per template, all 23 templates) x 25 = **7,500 pairs** (7,800 images incl. the Originals). `ladder.knobs` can
 add 7 more families (look-alike characters, ghost text, grain smoothing, soft shadow, local JPEG, object
 shift, heading shift) so 11 of the 12 metrics get their own ladder.
 
 **23 English templates:** invoice, receipt, certificate, application form, business letter,
 restaurant menu, event flyer, mobile settings screen, bank statement, payslip, boarding pass, medical
 prescription, resume, newsletter, nutrition label, ID card, shipping label, report card, utility bill,
-email, web landing page, chat screenshot, presentation slide (the ladder uses 21 of them - restaurant menu and
-mobile settings have no multi-line body block for the line-spacing edit) (incl. dark-mode and landscape variants) - all randomised (names, items, prices, colours,
+email, web landing page, chat screenshot, presentation slide (incl. dark-mode and landscape variants) - all randomised (names, items, prices, colours,
 fonts from 11 bundled open-licence families, paper texture, logos, stamps, QR codes, signatures, photos).
 Drop your own photos into `assets/photos/` and the flyer/menu/form photo areas will use them.
 
@@ -61,7 +60,7 @@ Drop your own photos into `assets/photos/` and the flyer/menu/form photo areas w
 5. Inference scoring - forced CoT (`<analysis>` one line per metric) then the 12 scores (`prism/vlm.py`).
 6. Python engine - category averages, overall, ranking of the 24 releases, best release (`prism/scoring.py`).
 7. Agreement analytics - MAE, RMSE, PLCC, SROCC (`prism/evaluation.py`).
-8. Diagnostic audit - top errors (|error| > 0.30), failure patterns, error by severity, optional human ceiling.
+8. Diagnostic audit - top errors (|error| > 0.30), failure patterns, error by severity.
 
 Checkpoint selection uses **validation-set generation MAE**, not training loss.
 

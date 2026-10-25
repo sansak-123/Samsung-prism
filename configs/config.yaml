@@ -28,16 +28,12 @@ sampling:                       # whole-document target scores (severity = 1 - s
   p_extra_defect: 0.20          # chance of one extra moderate off-focus defect
 
 ladder:                         # THE dataset (prism/ladder.py): per Original 1 control + edit families x 4 levels
-  n_originals: 147              # 7 per template = smallest count that keeps the 70/15/15 split
+  n_originals: 300              # spread over all 23 dataset.templates (13 each, the first template 14)
                                 # scores are MEASURED by the renderer during generation (no manual labels)
-  # the prism_iqa "24 generation": 6 families x 4 levels -> 1 + 24 releases per Original (147 x 25 = 3,675 pairs).
+  # the prism_iqa "24 generation": 6 families x 4 levels -> 1 + 24 releases per Original (300 x 25 = 7,500 pairs).
   # optional extra families (11 of the 12 metrics get their own ladder with all 13 -> 1 + 52 releases):
   #   char_substitution, ghost_residue, texture_smoothing, lighting_drop, local_compression, object_shift, heading_shift
   knobs: [font_family, font_size, font_color, inpaint_color_mismatch, justification, line_spacing]
-  # restaurant_menu / mobile_settings are left out: they have no multi-line body block for the line-spacing edit
-  templates: [invoice, receipt, certificate, application_form, business_letter, event_flyer,
-              bank_statement, payslip, boarding_pass, medical_prescription, resume, newsletter, nutrition_label, id_card,
-              shipping_label, report_card, utility_bill, email_message, web_landing_page, chat_screenshot, presentation_slide]
   max_conflicts: 0              # 0 = the edited block must never run into other text/objects/rules
 
 pilot:

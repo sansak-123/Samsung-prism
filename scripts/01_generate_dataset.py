@@ -11,7 +11,7 @@ Outputs
   data/metadata/ladder_summary.json    per knob x level: mean measured score, render audit, monotonicity
   data/metadata/metadata_ladder.json   24 records per Original in the metadata_real.json schema (measured scores)
 
-Usage:  python scripts/01_generate_dataset.py [--n 147] [--workers 8]
+Usage:  python scripts/01_generate_dataset.py [--n 300] [--workers 8]
 """
 
 import argparse
